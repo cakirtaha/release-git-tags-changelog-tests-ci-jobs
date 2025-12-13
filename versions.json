@@ -1,0 +1,16 @@
+{
+  "projects": {
+    "project1": {
+      "version": "0.2.0",
+      "description": "Project 1 - Main application"
+    },
+    "project2": {
+      "version": "0.1.0",
+      "description": "Project 2 - Secondary service"
+    },
+    "project3": {
+      "version": "0.1.0",
+      "description": "Project 3 - Utilities"
+    }
+  }
+}

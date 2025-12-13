@@ -1,247 +1,348 @@
-name: Auto Release for Project1
+name: Auto Release (Multi-Project)
 
-# Trigger Conditions:
-# - Runs when code is pushed to the master branch
-# - Only activates when files in src/project1/ directory are changed
-# - This ensures we don't create releases for changes in other projects
+# This workflow supports multiple projects with independent releases
+# Each project in src/ can have its own version and release cycle
+# Triggers when any project directory is modified
+
 on:
   push:
     branches:
       - master
     paths:
+      # Monitor all project directories
       - 'src/project1/**'
+      - 'src/project2/**'
+      - 'src/project3/**'
 
 # Ensures only one release workflow runs at a time
-# If a new push happens while a release is running, cancel the old one
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  auto-release:
-    name: Auto Release & Version Bump
+  # ============================================================================
+  # JOB 1: DETECT CHANGED PROJECTS
+  # Determines which projects have changes and need releases
+  # ============================================================================
+  detect-changes:
+    name: Detect Changed Projects
     runs-on: ubuntu-latest
+    outputs:
+      # Outputs a JSON array of changed projects
+      # Example: ["project1", "project2"]
+      projects: ${{ steps.detect.outputs.projects }}
+      has_changes: ${{ steps.detect.outputs.has_changes }}
 
-    # Required permissions for the workflow
-    # contents: write - Allows creating tags and releases
-    # pull-requests: write - Allows creating/updating PRs if needed
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # Need previous commit to compare
+
+      - name: Detect which projects changed
+        id: detect
+        run: |
+          # Get list of changed files in the push
+          # Compare current commit with previous commit
+          CHANGED_FILES=$(git diff --name-only HEAD^ HEAD)
+
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+          echo ""
+
+          # Initialize array to store changed projects
+          CHANGED_PROJECTS=()
+
+          # Check each project directory for changes
+          for PROJECT in project1 project2 project3; do
+            # Check if any changed files are in this project directory
+            if echo "$CHANGED_FILES" | grep -q "^src/${PROJECT}/"; then
+              echo "✓ Detected changes in $PROJECT"
+              CHANGED_PROJECTS+=("\"$PROJECT\"")
+            else
+              echo "○ No changes in $PROJECT"
+            fi
+          done
+
+          # Convert array to JSON format
+          # Example output: ["project1", "project2"]
+          if [ ${#CHANGED_PROJECTS[@]} -eq 0 ]; then
+            PROJECTS_JSON="[]"
+            HAS_CHANGES="false"
+            echo "No project changes detected"
+          else
+            PROJECTS_JSON="[$(IFS=,; echo "${CHANGED_PROJECTS[*]}")]"
+            HAS_CHANGES="true"
+            echo "Projects with changes: $PROJECTS_JSON"
+          fi
+
+          # Output for next job
+          echo "projects=$PROJECTS_JSON" >> $GITHUB_OUTPUT
+          echo "has_changes=$HAS_CHANGES" >> $GITHUB_OUTPUT
+
+  # ============================================================================
+  # JOB 2: RELEASE PROJECTS
+  # Creates releases for each changed project independently
+  # Uses matrix strategy to process multiple projects in parallel
+  # ============================================================================
+  release-projects:
+    name: Release ${{ matrix.project }}
+    runs-on: ubuntu-latest
+    needs: detect-changes
+
+    # Only run if there are changes
+    if: needs.detect-changes.outputs.has_changes == 'true'
+
+    # Matrix strategy: runs this job once per changed project
+    # If both project1 and project2 changed, creates 2 parallel jobs
+    strategy:
+      matrix:
+        project: ${{ fromJson(needs.detect-changes.outputs.projects) }}
+      fail-fast: false  # Continue releasing other projects if one fails
+
     permissions:
       contents: write
       pull-requests: write
 
     steps:
-      # Step 1: Checkout the repository
-      # fetch-depth: 0 fetches all history, needed for changelog generation
-      # This ensures we can see all commits for generating release notes
+      # Step 1: Checkout with full history for changelog generation
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # Use a PAT or the default token to allow pushing tags
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Step 2: Setup Python environment
-      # We need Python to run our version bumping script
+      # Step 2: Setup Python for version management scripts
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      # Step 3: Install uv package manager
-      # uv is a fast Python package manager used by this project
-      # enable-cache: true speeds up subsequent workflow runs
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-        with:
-          enable-cache: true
-
-      # Step 4: Get the current version from pyproject.toml
-      # This extracts the version field using Python's toml parsing
-      # The version is stored in an environment variable for later use
-      - name: Get current version
+      # Step 3: Get current version for this specific project
+      # Reads from versions.json using Python's json module
+      - name: Get current version for ${{ matrix.project }}
         id: get_version
         run: |
-          # Install toml library to parse pyproject.toml
-          pip install toml
+          # Read version from versions.json for this specific project
+          CURRENT_VERSION=$(python -c "import json; data = json.load(open('versions.json')); print(data['projects']['${{ matrix.project }}']['version'])")
 
-          # Extract version from pyproject.toml using Python
-          CURRENT_VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['project']['version'])")
+          if [ -z "$CURRENT_VERSION" ]; then
+            echo "Error: No version found for ${{ matrix.project }} in versions.json"
+            exit 1
+          fi
+
           echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
-          echo "📌 Current version: $CURRENT_VERSION"
+          echo "📌 Current version for ${{ matrix.project }}: $CURRENT_VERSION"
 
-      # Step 5: Calculate the new version
-      # This implements the version bumping logic:
-      # - Increments by 0.1 (e.g., 0.1 -> 0.2)
-      # - Handles rollover from 0.9 to 1.0
-      # - Handles rollover from 1.9 to 2.0, etc.
-      - name: Calculate new version
+      # Step 4: Calculate new version using 0.1 increment logic
+      # Handles rollover from 0.9 to 1.0, 1.9 to 2.0, etc.
+      - name: Calculate new version for ${{ matrix.project }}
         id: calc_version
         run: |
           CURRENT="${{ steps.get_version.outputs.current_version }}"
 
-          # Split version into major and minor parts
-          # For version "0.1.0", MAJOR=0, MINOR=1
+          # Parse major and minor version numbers
           MAJOR=$(echo $CURRENT | cut -d. -f1)
           MINOR=$(echo $CURRENT | cut -d. -f2)
 
           # Increment minor version by 1
           NEW_MINOR=$((MINOR + 1))
 
-          # Check if we need to roll over to next major version
-          # When minor reaches 10 (after 0.9), roll to next major version
+          # Handle rollover: 0.9 -> 1.0, 1.9 -> 2.0, etc.
           if [ $NEW_MINOR -eq 10 ]; then
             MAJOR=$((MAJOR + 1))
             NEW_MINOR=0
           fi
 
-          # Construct new version string
           NEW_VERSION="${MAJOR}.${NEW_MINOR}.0"
 
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "🚀 New version will be: $NEW_VERSION"
+          echo "🚀 New version for ${{ matrix.project }}: $NEW_VERSION"
 
-      # Step 6: Update version in pyproject.toml
-      # Uses sed to replace the version line in the file
-      # This ensures the repository reflects the new version
-      - name: Update version in pyproject.toml
+      # Step 5: Update versions.json with new version
+      # Uses Python to safely update JSON file
+      - name: Update version in versions.json
+        run: |
+          NEW_VERSION="${{ steps.calc_version.outputs.new_version }}"
+          PROJECT="${{ matrix.project }}"
+
+          # Update the version for this project using Python
+          python << EOF
+          import json
+          with open('versions.json', 'r') as f:
+              data = json.load(f)
+          data['projects']['$PROJECT']['version'] = '$NEW_VERSION'
+          with open('versions.json', 'w') as f:
+              json.dump(data, f, indent=2)
+          EOF
+
+          echo "✅ Updated $PROJECT version to $NEW_VERSION in versions.json"
+          echo "📄 Updated content:"
+          python -c "import json; data = json.load(open('versions.json')); print(json.dumps(data['projects']['$PROJECT'], indent=2))"
+
+      # Step 6: Update pyproject.toml version (for main project version)
+      # Only update if this is project1 (or your main project)
+      - name: Update pyproject.toml for ${{ matrix.project }}
+        if: matrix.project == 'project1'
         run: |
           NEW_VERSION="${{ steps.calc_version.outputs.new_version }}"
 
-          # Use sed to replace the version line
-          # -i '' means edit in-place (BSD sed on macOS) but GitHub uses GNU sed
-          # For GNU sed (Ubuntu/Linux), use -i without argument
+          # Update pyproject.toml only for project1
           sed -i "s/^version = .*/version = \"$NEW_VERSION\"/" pyproject.toml
 
           echo "✅ Updated pyproject.toml to version $NEW_VERSION"
 
-          # Display the change for verification
-          echo "📄 Updated content:"
-          grep "^version" pyproject.toml
-
-      # Step 7: Generate changelog
-      # Creates a comprehensive changelog from git commits
-      # Groups commits by type (feat, fix, docs, etc.)
-      - name: Generate changelog
+      # Step 7: Generate project-specific changelog
+      # Only includes commits that affected this specific project
+      - name: Generate changelog for ${{ matrix.project }}
         id: changelog
         run: |
           NEW_VERSION="${{ steps.calc_version.outputs.new_version }}"
           PREV_VERSION="${{ steps.get_version.outputs.current_version }}"
+          PROJECT="${{ matrix.project }}"
 
-          # Create changelog file
-          CHANGELOG_FILE="CHANGELOG_v${NEW_VERSION}.md"
+          # Create project-specific changelog
+          CHANGELOG_FILE="CHANGELOG_${PROJECT}_v${NEW_VERSION}.md"
 
-          echo "# Release v${NEW_VERSION}" > $CHANGELOG_FILE
+          echo "# Release $PROJECT v${NEW_VERSION}" > $CHANGELOG_FILE
           echo "" >> $CHANGELOG_FILE
-          echo "**Released on:** $(date '+%Y-%m-%d')" >> $CHANGELOG_FILE
+          echo "**Released on:** $(date '+%Y-%m-%d %H:%M:%S UTC')" >> $CHANGELOG_FILE
+          echo "**Project:** \`$PROJECT\`" >> $CHANGELOG_FILE
           echo "" >> $CHANGELOG_FILE
 
-          # Check if there's a previous tag to compare against
-          PREV_TAG=$(git tag -l "v${PREV_VERSION}" | head -1)
+          # Check for previous tag for this project
+          PREV_TAG="${PROJECT}-v${PREV_VERSION}"
 
-          if [ -z "$PREV_TAG" ]; then
-            echo "## Changes in src/project1" >> $CHANGELOG_FILE
+          if git rev-parse "$PREV_TAG" >/dev/null 2>&1; then
+            echo "## Changes since $PREV_TAG" >> $CHANGELOG_FILE
             echo "" >> $CHANGELOG_FILE
-            # No previous tag, show all commits affecting project1
-            git log --pretty=format:"- %s (%an)" -- src/project1/ >> $CHANGELOG_FILE
+
+            # Get commits since last tag that affect this project
+            COMMITS=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%an, %ar)" -- src/${PROJECT}/ 2>/dev/null)
+            if [ -z "$COMMITS" ]; then
+              echo "- No commits found" >> $CHANGELOG_FILE
+            else
+              echo "$COMMITS" >> $CHANGELOG_FILE
+            fi
           else
-            echo "## Changes since v${PREV_VERSION}" >> $CHANGELOG_FILE
+            echo "## Changes in \`src/$PROJECT/\`" >> $CHANGELOG_FILE
             echo "" >> $CHANGELOG_FILE
-            # Show commits since last tag that affect project1
-            git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%an)" -- src/project1/ >> $CHANGELOG_FILE
+
+            # No previous tag, show all commits for this project
+            COMMITS=$(git log --pretty=format:"- %s (%an, %ar)" -- src/${PROJECT}/ 2>/dev/null)
+            if [ -z "$COMMITS" ]; then
+              echo "- Initial release" >> $CHANGELOG_FILE
+            else
+              echo "$COMMITS" >> $CHANGELOG_FILE
+            fi
           fi
 
           echo "" >> $CHANGELOG_FILE
           echo "" >> $CHANGELOG_FILE
-          echo "---" >> $CHANGELOG_FILE
-          echo "*This release was automatically generated for changes in \`src/project1/\`*" >> $CHANGELOG_FILE
 
-          # Save changelog content for GitHub release
+          # Add file statistics
+          echo "## File Changes" >> $CHANGELOG_FILE
+          echo "" >> $CHANGELOG_FILE
+          echo '```' >> $CHANGELOG_FILE
+          if git rev-parse "$PREV_TAG" >/dev/null 2>&1; then
+            git diff --stat ${PREV_TAG}..HEAD -- src/${PROJECT}/ >> $CHANGELOG_FILE 2>/dev/null || echo "No changes" >> $CHANGELOG_FILE
+          else
+            echo "New project - all files added" >> $CHANGELOG_FILE
+          fi
+          echo '```' >> $CHANGELOG_FILE
+          echo "" >> $CHANGELOG_FILE
+
+          echo "---" >> $CHANGELOG_FILE
+          echo "*This release was automatically generated for changes in \`src/$PROJECT/\`*" >> $CHANGELOG_FILE
+
           echo "changelog_file=$CHANGELOG_FILE" >> $GITHUB_OUTPUT
 
-          echo "📝 Generated changelog:"
+          echo "📝 Generated changelog for $PROJECT:"
           cat $CHANGELOG_FILE
 
-      # Step 8: Commit the version bump
-      # Commits the updated pyproject.toml to the repository
-      # Uses [skip ci] to prevent triggering another CI run
-      - name: Commit version bump
+      # Step 8: Commit version updates
+      # Commits versions.json (and pyproject.toml if project1)
+      - name: Commit version bump for ${{ matrix.project }}
         run: |
           NEW_VERSION="${{ steps.calc_version.outputs.new_version }}"
+          PROJECT="${{ matrix.project }}"
 
-          # Configure git with GitHub Actions bot credentials
+          # Configure git
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Stage the changed file
-          git add pyproject.toml
+          # Pull latest changes to avoid conflicts (other projects might have released)
+          git pull --rebase origin master || true
 
-          # Commit with a clear message
-          # [skip ci] prevents this commit from triggering CI workflows
-          git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
+          # Stage files
+          git add versions.json
 
-          echo "✅ Committed version bump"
+          # Also stage pyproject.toml if this is project1
+          if [ "$PROJECT" == "project1" ]; then
+            git add pyproject.toml
+          fi
 
-      # Step 9: Create and push git tag
-      # Tags mark specific points in repository history
-      # Tags are used for releases and version tracking
-      - name: Create and push tag
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            # Commit with project-specific message
+            git commit -m "chore($PROJECT): bump version to $NEW_VERSION [skip ci]"
+            echo "✅ Committed version bump for $PROJECT"
+          fi
+
+      # Step 9: Create project-specific git tag
+      # Tag format: project1-v0.2.0, project2-v0.1.0, etc.
+      - name: Create and push tag for ${{ matrix.project }}
         run: |
           NEW_VERSION="${{ steps.calc_version.outputs.new_version }}"
-          TAG_NAME="v${NEW_VERSION}"
+          PROJECT="${{ matrix.project }}"
+          TAG_NAME="${PROJECT}-v${NEW_VERSION}"
 
-          # Create an annotated tag with a message
-          # Annotated tags include tagger name, email, date, and message
-          git tag -a "$TAG_NAME" -m "Release version $NEW_VERSION"
+          # Create annotated tag
+          git tag -a "$TAG_NAME" -m "Release $PROJECT version $NEW_VERSION"
 
           echo "🏷️  Created tag: $TAG_NAME"
 
-          # Push the commit and tag to remote
-          # --follow-tags pushes both the commit and associated tags
+          # Push commit and tag
           git push --follow-tags
 
-          echo "✅ Pushed commit and tag to remote"
+          echo "✅ Pushed commit and tag for $PROJECT"
 
-      # Step 10: Create GitHub Release
-      # Creates a formal GitHub release with changelog
-      # The release is visible on the repository's Releases page
-      - name: Create GitHub Release
+      # Step 10: Create GitHub Release with project-specific naming
+      # Release title: "project1 v0.2.0" instead of just "v0.2.0"
+      - name: Create GitHub Release for ${{ matrix.project }}
         uses: softprops/action-gh-release@v1
         with:
-          # Tag to create the release for
-          tag_name: v${{ steps.calc_version.outputs.new_version }}
+          # Project-specific tag name
+          tag_name: ${{ matrix.project }}-v${{ steps.calc_version.outputs.new_version }}
 
-          # Release title shown on GitHub
-          name: Release v${{ steps.calc_version.outputs.new_version }} - Project1
+          # Dynamic release name with project identifier
+          name: ${{ matrix.project }} v${{ steps.calc_version.outputs.new_version }}
 
-          # Body of the release (the changelog we generated)
+          # Project-specific changelog
           body_path: ${{ steps.changelog.outputs.changelog_file }}
 
-          # draft: false means publish immediately
-          # prerelease: false means this is a stable release
           draft: false
           prerelease: false
 
-          # generate_release_notes: true adds GitHub's automatic notes
-          # This includes contributors and full commit list
+          # Add GitHub's automatic release notes
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Step 11: Summary
-      # Displays a summary in the GitHub Actions UI
-      # This makes it easy to see what version was released
-      - name: Release summary
+      # Step 11: Release summary for GitHub Actions UI
+      - name: Release summary for ${{ matrix.project }}
         run: |
           NEW_VERSION="${{ steps.calc_version.outputs.new_version }}"
           PREV_VERSION="${{ steps.get_version.outputs.current_version }}"
+          PROJECT="${{ matrix.project }}"
 
-          echo "### 🎉 Release Complete!" >> $GITHUB_STEP_SUMMARY
+          echo "### 🎉 Release Complete for $PROJECT!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Project:** \`$PROJECT\`" >> $GITHUB_STEP_SUMMARY
           echo "**Previous Version:** v${PREV_VERSION}" >> $GITHUB_STEP_SUMMARY
           echo "**New Version:** v${NEW_VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag:** \`${PROJECT}-v${NEW_VERSION}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Tag:** \`v${NEW_VERSION}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Triggered by:** Changes in \`src/project1/\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🔗 [View Release](https://github.com/${{ github.repository }}/releases/tag/v${NEW_VERSION})" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 [View Release](https://github.com/${{ github.repository }}/releases/tag/${PROJECT}-v${NEW_VERSION})" >> $GITHUB_STEP_SUMMARY
