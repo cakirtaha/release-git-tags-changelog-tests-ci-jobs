@@ -18,3 +18,66 @@ dev = [
     "pre-commit>=3.7.0",
     "bandit>=1.7.0",
 ]
+
+# ============================================================================
+# TOOL CONFIGURATIONS
+# ============================================================================
+
+# Ruff configuration - Python linter and formatter
+[tool.ruff]
+# Set the maximum line length to 100 characters
+line-length = 100
+
+# Target Python 3.12 and above
+target-version = "py312"
+
+# Automatically fix auto-fixable issues
+fix = true
+
+[tool.ruff.lint]
+# Enable these rule sets:
+# E/W = pycodestyle errors and warnings
+# F = pyflakes (logical errors)
+# I = isort (import sorting)
+# N = pep8-naming
+# UP = pyupgrade (modernize Python code)
+# B = flake8-bugbear (find likely bugs)
+# C90 = mccabe (complexity checking)
+select = ["E", "W", "F", "I", "N", "UP", "B", "C90"]
+
+# Ignore certain rules that are too strict or opinionated
+ignore = [
+    "E501",  # Line too long (handled by formatter)
+]
+
+[tool.ruff.format]
+# Use double quotes for strings
+quote-style = "double"
+
+# Use spaces for indentation
+indent-style = "space"
+
+# Bandit configuration - Security linting
+[tool.bandit]
+# Exclude test directories from security scanning
+# Tests often contain intentionally "insecure" code for testing purposes
+exclude_dirs = ["tests", ".venv", "venv"]
+
+# Skip certain tests that are too noisy or not relevant
+# B101: assert_used - Asserts are fine in tests
+# B601: paramiko_calls - Not using paramiko
+skips = ["B101"]
+
+# MyPy configuration - Type checking
+[tool.mypy]
+# Require type hints for function definitions
+disallow_untyped_defs = false
+
+# Warn about functions without return type annotations
+warn_return_any = false
+
+# Allow untyped calls to third-party libraries
+ignore_missing_imports = true
+
+# Show error codes in output
+show_error_codes = true

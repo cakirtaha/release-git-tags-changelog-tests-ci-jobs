@@ -1,7 +1,134 @@
 repos:
-  # File hygiene
+  # ============================================================================
+  # FILE HYGIENE HOOKS
+  # These hooks ensure basic file quality and formatting
+  # ============================================================================
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.5.0
     hooks:
+      # Removes trailing whitespace from all lines
+      # Why: Prevents unnecessary git diffs and keeps code clean
       - id: trailing-whitespace
+        name: Remove trailing whitespace
+
+      # Ensures files end with a newline character
+      # Why: POSIX standard, prevents issues with some tools
       - id: end-of-file-fixer
+        name: Fix end of files
+
+      # Checks for files that would conflict on case-insensitive filesystems
+      # Why: Prevents issues when working across Mac/Linux/Windows
+      - id: check-case-conflict
+        name: Check for case conflicts
+
+      # Ensures JSON files are valid
+      # Why: Catches syntax errors in JSON config files
+      - id: check-json
+        name: Check JSON syntax
+
+      # Ensures YAML files are valid
+      # Why: Catches syntax errors in YAML files (workflows, configs)
+      - id: check-yaml
+        name: Check YAML syntax
+        args: [--unsafe]  # Allows custom YAML tags (needed for some tools)
+
+      # Ensures TOML files are valid
+      # Why: Catches syntax errors in pyproject.toml
+      - id: check-toml
+        name: Check TOML syntax
+
+      # Prevents committing files larger than 500KB
+      # Why: Large files should use Git LFS, not be committed directly
+      - id: check-added-large-files
+        name: Check for large files
+        args: ['--maxkb=500']
+
+      # Checks for merge conflict markers (<<<<<<, >>>>>>, ======)
+      # Why: Prevents accidentally committing unresolved merge conflicts
+      - id: check-merge-conflict
+        name: Check for merge conflicts
+
+      # Prevents committing directly to protected branches
+      # Why: Enforces PR workflow for main/master branches
+      - id: no-commit-to-branch
+        name: Prevent commits to main/master
+        args: ['--branch', 'main', '--branch', 'master']
+
+  # ============================================================================
+  # PYTHON CODE FORMATTING - RUFF
+  # Ruff is an extremely fast Python linter and formatter (written in Rust)
+  # It replaces: black, isort, flake8, pylint, and more
+  # ============================================================================
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.0
+    hooks:
+      # Ruff linter - checks code quality, style, and common errors
+      # What it checks: unused imports, undefined variables, style violations, etc.
+      - id: ruff
+        name: Ruff linter
+        args:
+          - --fix           # Automatically fix issues when possible
+          - --exit-non-zero-on-fix  # Fail if fixes were applied (so you see them)
+
+      # Ruff formatter - formats code consistently (like black)
+      # What it does: fixes indentation, line length, quote style, etc.
+      - id: ruff-format
+        name: Ruff formatter
+
+  # ============================================================================
+  # TYPE CHECKING - MYPY
+  # Checks Python type hints for correctness
+  # ============================================================================
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0
+    hooks:
+      # Static type checker for Python
+      # What it does: Verifies type hints are correct and consistent
+      - id: mypy
+        name: MyPy type checker
+        additional_dependencies: []  # Add type stub packages here if needed
+        args:
+          - --ignore-missing-imports  # Don't fail on untyped third-party libraries
+          - --show-error-codes        # Show error codes for easier debugging
+
+  # ============================================================================
+  # SECURITY SCANNING - BANDIT
+  # Scans Python code for common security issues
+  # ============================================================================
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.8
+    hooks:
+      # Security linter for Python
+      # What it checks: SQL injection, hardcoded passwords, insecure functions, etc.
+      - id: bandit
+        name: Bandit security checker
+        args:
+          - -c
+          - pyproject.toml  # Load config from pyproject.toml
+        additional_dependencies: ["bandit[toml]"]
+
+  # ============================================================================
+  # COMMIT MESSAGE VALIDATION
+  # Ensures commit messages follow conventional commits format
+  # ============================================================================
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.2.0
+    hooks:
+      # Validates commit message format
+      # Expected format: type(scope): description
+      # Examples: feat: add login, fix: resolve bug, docs: update readme
+      - id: conventional-pre-commit
+        name: Check commit message format
+        stages: [commit-msg]
+        args:
+          - feat       # New features
+          - fix        # Bug fixes
+          - docs       # Documentation changes
+          - style      # Code style changes (formatting, missing semi-colons, etc.)
+          - refactor   # Code refactoring
+          - perf       # Performance improvements
+          - test       # Adding or updating tests
+          - build      # Build system or dependency changes
+          - ci         # CI/CD changes
+          - chore      # Other changes that don't modify src or test files
+          - revert     # Revert a previous commit
