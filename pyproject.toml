@@ -1,0 +1,20 @@
+[project]
+name = "test-git-practices"
+version = "0.1.0"
+description = "gitpractices"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    # Testing
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "pytest-xdist>=3.5.0",
+    # Code quality
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+    "pre-commit>=3.7.0",
+    "bandit>=1.7.0",
+]
