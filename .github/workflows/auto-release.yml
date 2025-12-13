@@ -1,0 +1,247 @@
+name: Auto Release for Project1
+
+# Trigger Conditions:
+# - Runs when code is pushed to the master branch
+# - Only activates when files in src/project1/ directory are changed
+# - This ensures we don't create releases for changes in other projects
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'src/project1/**'
+
+# Ensures only one release workflow runs at a time
+# If a new push happens while a release is running, cancel the old one
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  auto-release:
+    name: Auto Release & Version Bump
+    runs-on: ubuntu-latest
+
+    # Required permissions for the workflow
+    # contents: write - Allows creating tags and releases
+    # pull-requests: write - Allows creating/updating PRs if needed
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      # Step 1: Checkout the repository
+      # fetch-depth: 0 fetches all history, needed for changelog generation
+      # This ensures we can see all commits for generating release notes
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Use a PAT or the default token to allow pushing tags
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Step 2: Setup Python environment
+      # We need Python to run our version bumping script
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Step 3: Install uv package manager
+      # uv is a fast Python package manager used by this project
+      # enable-cache: true speeds up subsequent workflow runs
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      # Step 4: Get the current version from pyproject.toml
+      # This extracts the version field using Python's toml parsing
+      # The version is stored in an environment variable for later use
+      - name: Get current version
+        id: get_version
+        run: |
+          # Install toml library to parse pyproject.toml
+          pip install toml
+
+          # Extract version from pyproject.toml using Python
+          CURRENT_VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['project']['version'])")
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "📌 Current version: $CURRENT_VERSION"
+
+      # Step 5: Calculate the new version
+      # This implements the version bumping logic:
+      # - Increments by 0.1 (e.g., 0.1 -> 0.2)
+      # - Handles rollover from 0.9 to 1.0
+      # - Handles rollover from 1.9 to 2.0, etc.
+      - name: Calculate new version
+        id: calc_version
+        run: |
+          CURRENT="${{ steps.get_version.outputs.current_version }}"
+
+          # Split version into major and minor parts
+          # For version "0.1.0", MAJOR=0, MINOR=1
+          MAJOR=$(echo $CURRENT | cut -d. -f1)
+          MINOR=$(echo $CURRENT | cut -d. -f2)
+
+          # Increment minor version by 1
+          NEW_MINOR=$((MINOR + 1))
+
+          # Check if we need to roll over to next major version
+          # When minor reaches 10 (after 0.9), roll to next major version
+          if [ $NEW_MINOR -eq 10 ]; then
+            MAJOR=$((MAJOR + 1))
+            NEW_MINOR=0
+          fi
+
+          # Construct new version string
+          NEW_VERSION="${MAJOR}.${NEW_MINOR}.0"
+
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "🚀 New version will be: $NEW_VERSION"
+
+      # Step 6: Update version in pyproject.toml
+      # Uses sed to replace the version line in the file
+      # This ensures the repository reflects the new version
+      - name: Update version in pyproject.toml
+        run: |
+          NEW_VERSION="${{ steps.calc_version.outputs.new_version }}"
+
+          # Use sed to replace the version line
+          # -i '' means edit in-place (BSD sed on macOS) but GitHub uses GNU sed
+          # For GNU sed (Ubuntu/Linux), use -i without argument
+          sed -i "s/^version = .*/version = \"$NEW_VERSION\"/" pyproject.toml
+
+          echo "✅ Updated pyproject.toml to version $NEW_VERSION"
+
+          # Display the change for verification
+          echo "📄 Updated content:"
+          grep "^version" pyproject.toml
+
+      # Step 7: Generate changelog
+      # Creates a comprehensive changelog from git commits
+      # Groups commits by type (feat, fix, docs, etc.)
+      - name: Generate changelog
+        id: changelog
+        run: |
+          NEW_VERSION="${{ steps.calc_version.outputs.new_version }}"
+          PREV_VERSION="${{ steps.get_version.outputs.current_version }}"
+
+          # Create changelog file
+          CHANGELOG_FILE="CHANGELOG_v${NEW_VERSION}.md"
+
+          echo "# Release v${NEW_VERSION}" > $CHANGELOG_FILE
+          echo "" >> $CHANGELOG_FILE
+          echo "**Released on:** $(date '+%Y-%m-%d')" >> $CHANGELOG_FILE
+          echo "" >> $CHANGELOG_FILE
+
+          # Check if there's a previous tag to compare against
+          PREV_TAG=$(git tag -l "v${PREV_VERSION}" | head -1)
+
+          if [ -z "$PREV_TAG" ]; then
+            echo "## Changes in src/project1" >> $CHANGELOG_FILE
+            echo "" >> $CHANGELOG_FILE
+            # No previous tag, show all commits affecting project1
+            git log --pretty=format:"- %s (%an)" -- src/project1/ >> $CHANGELOG_FILE
+          else
+            echo "## Changes since v${PREV_VERSION}" >> $CHANGELOG_FILE
+            echo "" >> $CHANGELOG_FILE
+            # Show commits since last tag that affect project1
+            git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%an)" -- src/project1/ >> $CHANGELOG_FILE
+          fi
+
+          echo "" >> $CHANGELOG_FILE
+          echo "" >> $CHANGELOG_FILE
+          echo "---" >> $CHANGELOG_FILE
+          echo "*This release was automatically generated for changes in \`src/project1/\`*" >> $CHANGELOG_FILE
+
+          # Save changelog content for GitHub release
+          echo "changelog_file=$CHANGELOG_FILE" >> $GITHUB_OUTPUT
+
+          echo "📝 Generated changelog:"
+          cat $CHANGELOG_FILE
+
+      # Step 8: Commit the version bump
+      # Commits the updated pyproject.toml to the repository
+      # Uses [skip ci] to prevent triggering another CI run
+      - name: Commit version bump
+        run: |
+          NEW_VERSION="${{ steps.calc_version.outputs.new_version }}"
+
+          # Configure git with GitHub Actions bot credentials
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Stage the changed file
+          git add pyproject.toml
+
+          # Commit with a clear message
+          # [skip ci] prevents this commit from triggering CI workflows
+          git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
+
+          echo "✅ Committed version bump"
+
+      # Step 9: Create and push git tag
+      # Tags mark specific points in repository history
+      # Tags are used for releases and version tracking
+      - name: Create and push tag
+        run: |
+          NEW_VERSION="${{ steps.calc_version.outputs.new_version }}"
+          TAG_NAME="v${NEW_VERSION}"
+
+          # Create an annotated tag with a message
+          # Annotated tags include tagger name, email, date, and message
+          git tag -a "$TAG_NAME" -m "Release version $NEW_VERSION"
+
+          echo "🏷️  Created tag: $TAG_NAME"
+
+          # Push the commit and tag to remote
+          # --follow-tags pushes both the commit and associated tags
+          git push --follow-tags
+
+          echo "✅ Pushed commit and tag to remote"
+
+      # Step 10: Create GitHub Release
+      # Creates a formal GitHub release with changelog
+      # The release is visible on the repository's Releases page
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          # Tag to create the release for
+          tag_name: v${{ steps.calc_version.outputs.new_version }}
+
+          # Release title shown on GitHub
+          name: Release v${{ steps.calc_version.outputs.new_version }} - Project1
+
+          # Body of the release (the changelog we generated)
+          body_path: ${{ steps.changelog.outputs.changelog_file }}
+
+          # draft: false means publish immediately
+          # prerelease: false means this is a stable release
+          draft: false
+          prerelease: false
+
+          # generate_release_notes: true adds GitHub's automatic notes
+          # This includes contributors and full commit list
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Step 11: Summary
+      # Displays a summary in the GitHub Actions UI
+      # This makes it easy to see what version was released
+      - name: Release summary
+        run: |
+          NEW_VERSION="${{ steps.calc_version.outputs.new_version }}"
+          PREV_VERSION="${{ steps.get_version.outputs.current_version }}"
+
+          echo "### 🎉 Release Complete!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Previous Version:** v${PREV_VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "**New Version:** v${NEW_VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag:** \`v${NEW_VERSION}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** Changes in \`src/project1/\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 [View Release](https://github.com/${{ github.repository }}/releases/tag/v${NEW_VERSION})" >> $GITHUB_STEP_SUMMARY
