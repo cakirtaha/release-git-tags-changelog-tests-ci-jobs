@@ -1,0 +1,158 @@
+# CODEOWNERS - Code Ownership and Review Assignments
+# ====================================================
+#
+# This file defines who is responsible for reviewing changes to specific
+# files and directories. When a pull request modifies these files, the
+# designated owners are automatically requested as reviewers.
+#
+# Format:
+#   path/pattern @username @org/team
+#
+# Patterns:
+#   - Use glob patterns like *.js or /docs/**
+#   - More specific patterns override general ones
+#   - Last matching pattern wins
+#
+# Documentation: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# ==============================================================================
+# DEFAULT OWNERS
+# ==============================================================================
+# These owners will be requested for review unless a later match overrides
+
+# Global default - all files fallback
+* @cakirtaha
+
+# ==============================================================================
+# PROJECT-SPECIFIC OWNERS
+# ==============================================================================
+# Each project has designated maintainers
+
+/src/project1/ @cakirtaha
+# /src/project1/ @team-project1 @project1-lead
+
+/src/project2/ @cakirtaha
+# /src/project2/ @team-project2 @project2-lead
+
+/src/project3/ @cakirtaha
+# /src/project3/ @team-project3 @project3-lead
+
+# ==============================================================================
+# CONFIGURATION & INFRASTRUCTURE
+# ==============================================================================
+# Critical files requiring senior/lead approval
+
+# Version management - requires release team approval
+/versions.json @cakirtaha
+# /versions.json @release-team @senior-dev
+
+# Python package configuration
+/pyproject.toml @cakirtaha
+# /pyproject.toml @senior-dev @python-experts
+
+# Dependency locks
+/uv.lock @cakirtaha
+# /uv.lock @security-team @senior-dev
+
+# ==============================================================================
+# CI/CD & WORKFLOWS
+# ==============================================================================
+# DevOps and senior developers review workflow changes
+
+/.github/workflows/ @cakirtaha
+# /.github/workflows/ @devops-team @senior-dev
+
+# Branch protection and repository settings
+/.github/CODEOWNERS @cakirtaha
+# /.github/CODEOWNERS @admin-team
+
+# ==============================================================================
+# CODE QUALITY & SECURITY
+# ==============================================================================
+# Security-sensitive configuration files
+
+# Pre-commit hooks configuration
+/.pre-commit-config.yaml @cakirtaha
+# /.pre-commit-config.yaml @security-team @code-quality-team
+
+# Git configuration
+/.gitignore @cakirtaha
+/.gitattributes @cakirtaha
+
+# ==============================================================================
+# DOCUMENTATION
+# ==============================================================================
+# Technical writers and documentation team
+
+# Root documentation
+/*.md @cakirtaha
+# /*.md @docs-team
+
+# Guides and tutorials
+/docs/ @cakirtaha
+# /docs/ @docs-team @tech-writers
+
+# API documentation
+# /docs/api/ @api-team @backend-team
+
+# ==============================================================================
+# TESTS
+# ==============================================================================
+# QA team and relevant project owners
+
+/tests/ @cakirtaha
+# /tests/ @qa-team
+
+# Project-specific tests
+/tests/project1/ @cakirtaha
+# /tests/project1/ @team-project1 @qa-team
+
+# ==============================================================================
+# SCRIPTS & AUTOMATION
+# ==============================================================================
+# DevOps and automation team
+
+/scripts/ @cakirtaha
+# /scripts/ @devops-team @automation-team
+
+# ==============================================================================
+# EXAMPLES & BEST PRACTICES
+# ==============================================================================
+
+# Example 1: Specific file types
+# *.py @python-team
+# *.js @javascript-team
+# *.yml @devops-team
+
+# Example 2: Specific files
+# /LICENSE @legal-team
+# /SECURITY.md @security-team
+
+# Example 3: Multiple owners (all must approve if required)
+# /src/critical/ @senior-dev @security-team @team-lead
+
+# Example 4: Wildcards
+# /src/**/security/ @security-team
+# /src/**/*_test.py @qa-team
+
+# Example 5: Exclusions (use more specific pattern)
+# /docs/**/*.md @docs-team
+# /docs/api/**/*.md @api-team @backend-team  # More specific, overrides above
+
+# ==============================================================================
+# NOTES
+# ==============================================================================
+#
+# 1. Usernames must start with @
+# 2. Team names are @org/team-name
+# 3. Order matters - last matching pattern wins
+# 4. To require CODEOWNERS review:
+#    - Go to Settings → Branches → Branch protection rules
+#    - Enable "Require review from Code Owners"
+#
+# 5. To see who owns a file:
+#    gh api repos/{owner}/{repo}/codeowners/errors
+#
+# 6. To test CODEOWNERS locally:
+#    - Install: npm install -g codeowners
+#    - Run: codeowners /path/to/file
