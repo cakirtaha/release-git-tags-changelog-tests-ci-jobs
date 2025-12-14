@@ -213,3 +213,5 @@ __marimo__/
 # Claude Code
 .claude/
 AUTO_RELEASE_GUIDE.md
+scripts/setup-branch-protection.py
+scripts/setup-branch-protection.sh
